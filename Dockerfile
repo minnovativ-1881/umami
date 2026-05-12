@@ -41,13 +41,6 @@ RUN set -x \
     && apk add --no-cache curl \
     && npm install -g pnpm@9
 
-# Script dependencies
-# pnpm v9 erlaubt Build-Scripts standardmaessig, daher kein --allow-build noetig
-RUN pnpm add npm-run-all dotenv chalk semver \
-    prisma@${PRISMA_VERSION} \
-    @prisma/client@${PRISMA_VERSION} \
-    @prisma/adapter-pg@${PRISMA_VERSION}
-
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/scripts ./scripts
@@ -57,6 +50,15 @@ COPY --from=builder /app/generated ./generated
 # https://nextjs.org/docs/advanced-features/output-file-tracing
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+# Script dependencies NACH den standalone-COPYs hinzufuegen, sonst
+# ueberschreibt der standalone-Output die frisch installierten node_modules
+# (z.B. semver wurde zuvor weggeraeumt -> check-db.js scheiterte zur Laufzeit).
+# pnpm v9 erlaubt Build-Scripts standardmaessig.
+RUN pnpm add npm-run-all dotenv chalk semver \
+    prisma@${PRISMA_VERSION} \
+    @prisma/client@${PRISMA_VERSION} \
+    @prisma/adapter-pg@${PRISMA_VERSION}
 
 USER nextjs
 
