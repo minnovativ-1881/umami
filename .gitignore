@@ -50,3 +50,8 @@ yarn-error.log*
 *.env.*
 
 *.dev.yml
+
+# Lokale Keys/Caches/Skripte fuer Timons Setup (niemals committen)
+_KEYS_PRIVAT_NICHT_VERTEILEN.md
+_fathom_cache/
+_import_skripte/
