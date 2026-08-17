@@ -14,7 +14,16 @@ class UmamiRedisClient {
   isConnected: boolean;
 
   constructor(url: string) {
-    const client = createClient({ url }).on('error', logError);
+    const client = createClient({
+      url,
+      // Resilienz: Ein ausgefallener Redis darf Requests NICHT blockieren.
+      // Keine ewige Offline-Warteschlange, kurzer Connect-Timeout, begrenzte Reconnects.
+      disableOfflineQueue: true,
+      socket: {
+        connectTimeout: 2000,
+        reconnectStrategy: (retries: number) => Math.min(retries * 500, 5000),
+      },
+    }).on('error', logError);
 
     this.url = url;
     this.client = client as RedisClientType;
@@ -32,60 +41,98 @@ class UmamiRedisClient {
   }
 
   async get(key: string) {
-    await this.connect();
-
-    const data = await this.client.get(key);
-
     try {
-      return JSON.parse(data as string);
-    } catch {
+      await this.connect();
+
+      const data = await this.client.get(key);
+
+      try {
+        return JSON.parse(data as string);
+      } catch {
+        return null;
+      }
+    } catch (e) {
+      logError(e);
       return null;
     }
   }
 
   async set(key: string, value: any, time?: number) {
-    await this.connect();
+    try {
+      await this.connect();
 
-    const ttl = time && time > 0 ? time : DEFAULT_TTL;
+      const ttl = time && time > 0 ? time : DEFAULT_TTL;
 
-    return this.client.set(key, JSON.stringify(value), { EX: ttl });
+      return await this.client.set(key, JSON.stringify(value), { EX: ttl });
+    } catch (e) {
+      logError(e);
+      return null;
+    }
   }
 
   async del(key: string) {
-    await this.connect();
+    try {
+      await this.connect();
 
-    return this.client.del(key);
+      return await this.client.del(key);
+    } catch (e) {
+      logError(e);
+      return null;
+    }
   }
 
   async incr(key: string) {
-    await this.connect();
+    try {
+      await this.connect();
 
-    return this.client.incr(key);
+      return await this.client.incr(key);
+    } catch (e) {
+      logError(e);
+      return 0;
+    }
   }
 
   async expire(key: string, seconds: number) {
-    await this.connect();
+    try {
+      await this.connect();
 
-    return this.client.expire(key, seconds);
+      return await this.client.expire(key, seconds);
+    } catch (e) {
+      logError(e);
+      return null;
+    }
   }
 
   async rateLimit(key: string, limit: number, seconds: number): Promise<boolean> {
-    await this.connect();
+    try {
+      await this.connect();
 
-    const res = await this.client.incr(key);
+      const res = await this.client.incr(key);
 
-    if (res === 1) {
-      await this.client.expire(key, seconds);
+      if (res === 1) {
+        await this.client.expire(key, seconds);
+      }
+
+      return res >= limit;
+    } catch (e) {
+      logError(e);
+      // Bei Redis-Ausfall nicht limitieren, statt den Request zu blockieren.
+      return false;
     }
-
-    return res >= limit;
   }
 
   async fetch(key: string, query: () => Promise<any>, time?: number) {
-    const result = await this.get(key);
+    let result = null;
+
+    try {
+      result = await this.get(key);
+    } catch {
+      result = null;
+    }
 
     if (result === DELETED) return null;
 
+    // Kein Cache-Treffer (oder Redis nicht erreichbar): direkt aus der Datenbank holen.
     if (!result && query) {
       const data = await query();
       if (data) {
